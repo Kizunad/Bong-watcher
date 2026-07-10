@@ -1,0 +1,20 @@
+# 部署样例：docker compose up -d
+# GH_TOKEN 供 gh CLI 读 open PR（repo:read 权限的 fine-grained token 即可）；
+# 缺省时 dashboard 仍可用，open PR 栏报采集错误并沿用上次快照。
+services:
+  bong-watcher:
+    image: ghcr.io/kizunad/bong-watcher:latest
+    container_name: bong-watcher
+    ports:
+      - "8901:8901"
+    environment:
+      - GH_TOKEN=${GH_TOKEN}
+    volumes:
+      - bong-repo:/data
+    restart: unless-stopped
+    labels:
+      # Watchtower 白名单模式（--label-enable）时放行本容器
+      - com.centurylinklabs.watchtower.enable=true
+
+volumes:
+  bong-repo:

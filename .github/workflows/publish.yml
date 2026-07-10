@@ -1,0 +1,40 @@
+name: Publish image
+
+# push main（含 PR merge）→ 构建镜像推 GHCR :latest + :sha
+# 服务器上的 Watchtower 盯 :latest 自动拉取重部署，形成 merge 即上线。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-image
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 冒烟：单测必须全绿才发镜像
+        run: python3 tests.py
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/kizunad/bong-watcher:latest
+            ghcr.io/kizunad/bong-watcher:${{ github.sha }}

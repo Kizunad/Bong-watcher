@@ -11,7 +11,19 @@ python3 tests.py             # 纯函数单测
 
 环境变量：`BONG_REPO`（默认 `~/Code/Bong`）、`PORT`（默认 8901）、`REFRESH_SEC`（默认 300）。
 
-依赖 `gh` CLI 已登录（读 open PR 用）；合并史 / 署名统计 / module-map 全走本地 git（每轮刷新先 `git fetch origin`，不碰工作区）。
+依赖 `gh` CLI 已登录（读 open PR 用，容器内用 `GH_TOKEN` env）；合并史 / 署名统计 / module-map 全走本地 git（每轮刷新先 `git fetch origin`，不碰工作区）。
+
+## Docker + Watchtower 持续部署
+
+```bash
+GH_TOKEN=ghp_xxx docker compose up -d     # 拉 ghcr.io/kizunad/bong-watcher:latest
+```
+
+链路：**push/merge main → Actions `publish.yml`（单测冒烟 → 构建 → 推 GHCR `:latest` + `:sha`）→ 服务器 Watchtower 检测到新 `:latest` 自动拉取重启容器**。容器首启在 `/data` volume 里对 Bong 做 `--filter=blob:none` 部分克隆，之后每轮刷新只 fetch 增量。
+
+- Watchtower 若跑在 `--label-enable` 白名单模式，compose 里已带 `com.centurylinklabs.watchtower.enable=true` 标签
+- **首次发布后需把 GHCR package 设为 public**（GitHub → Packages → bong-watcher → Package settings → Change visibility），否则 Watchtower 匿名拉不到；不想公开就给 Watchtower 配 registry 凭据
+- `GH_TOKEN` 只需 repo read 权限（fine-grained：Kizunad/Bong 的 Pull requests: read）
 
 ## 页面
 
