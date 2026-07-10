@@ -7,6 +7,7 @@ from pathlib import Path
 from watcher import (
     collect_open_prs,
     next_sleep,
+    pos_int_env,
     infer_modules,
     parse_merged_log,
     parse_pr_number,
@@ -332,6 +333,42 @@ class RealGhFixtures(unittest.TestCase):
             return []
         prs = collect_open_prs(MODS, gh=gh)
         self.assertEqual(prs[0]["checks"], [{"name": "e2e", "state": "PENDING"}])
+
+
+class PosIntEnv(unittest.TestCase):
+    def setUp(self):
+        import os
+        self.env = os.environ
+
+    def _with(self, val):
+        import os
+        os.environ["X_TEST_INTERVAL"] = val
+        try:
+            return pos_int_env("X_TEST_INTERVAL", 300)
+        finally:
+            del os.environ["X_TEST_INTERVAL"]
+
+    def test_missing_uses_default(self):
+        self.assertEqual(pos_int_env("X_TEST_ABSENT", 300), 300)
+
+    def test_valid(self):
+        self.assertEqual(self._with("60"), 60)
+
+    def test_zero_falls_back(self):
+        self.assertEqual(self._with("0"), 300, "零间隔=忙循环，必须回退默认")
+
+    def test_negative_falls_back(self):
+        self.assertEqual(self._with("-5"), 300, "负数会让 time.sleep 抛异常杀线程")
+
+    def test_non_numeric_falls_back(self):
+        self.assertEqual(self._with("abc"), 300)
+
+
+class NextSleepClamp(unittest.TestCase):
+    def test_never_below_one(self):
+        self.assertEqual(next_sleep(None, True, 0, 0), 1,
+                         "next_sleep 必须保证正值，杜绝忙循环/sleep 异常")
+        self.assertEqual(next_sleep("e", False, 300, -3), 1)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ WORKDIR /app
 COPY watcher.py index.html entrypoint.sh ./
 
 # 容器内自带 Bong 克隆（volume 持久化），首启由 entrypoint 完成
-ENV BONG_REPO=/data/Bong \
+ENV PYTHONUNBUFFERED=1 \
+    BONG_REPO=/data/Bong \
     PORT=8901 \
     REFRESH_SEC=300
 

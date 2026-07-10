@@ -22,9 +22,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BONG = Path(os.environ.get("BONG_REPO", str(Path.home() / "Code" / "Bong")))
-PORT = int(os.environ.get("PORT", "8901"))
-REFRESH_SEC = int(os.environ.get("REFRESH_SEC", "300"))
-BACKOFF_SEC = int(os.environ.get("BACKOFF_SEC", "15"))
+
+
+def pos_int_env(name, default):
+    """环境变量解析为正整数；非法（非数字/零/负）回退默认并告警——
+    绝不让坏配置传进 time.sleep 无声杀死刷新线程。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        v = 0
+    if v <= 0:
+        print(f"[watcher] WARN: {name}={raw!r} 非法，回退默认 {default}")
+        return default
+    return v
+
+
+PORT = pos_int_env("PORT", 8901)
+REFRESH_SEC = pos_int_env("REFRESH_SEC", 300)
+BACKOFF_SEC = pos_int_env("BACKOFF_SEC", 15)
 HERE = Path(__file__).resolve().parent
 
 _LOCK = threading.Lock()
@@ -103,7 +121,7 @@ def tally_lines(text: str, strip_email: bool = False):
 def next_sleep(error, has_snapshot, refresh, backoff):
     """短退避仅用于「报错且从未有过有效快照」（容器首启等克隆落地）；
     已有有效快照后的偶发失败沿用正常周期，不高频重试打爆 git/gh。"""
-    return backoff if (error and not has_snapshot) else refresh
+    return max(1, backoff if (error and not has_snapshot) else refresh)
 
 
 def parse_merged_log(raw: str):

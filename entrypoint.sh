@@ -46,6 +46,14 @@ prepare_repo_slot() {
     return 1
 }
 
+# 启动清扫：上次非正常退出（TERM 中断克隆等）遗留的临时目录。
+# 命名模式固定且为脚本专属，单容器独占 volume，清扫安全。
+clean_stale_tmp() {
+    parent="$(dirname "$BONG_REPO")"
+    [ -d "$parent" ] || return 0
+    find "$parent" -maxdepth 1 -name '.clone-tmp.*' -exec rm -rf {} + 2>/dev/null || true
+}
+
 # 异步阶段：仅克隆（慢操作）
 clone_repo() {
     parent="$(dirname "$BONG_REPO")"
@@ -53,18 +61,25 @@ clone_repo() {
         echo "[entrypoint] WARN: 无法创建父目录 $parent，跳过克隆（HTTP 服务照常）"
         return 1
     }
+    clean_stale_tmp
     for delay in $CLONE_RETRY_DELAYS; do
-        tmp="$parent/.clone-tmp.$$"
-        rm -rf "$tmp"   # 只清理本进程自建的临时目录
-        echo "[entrypoint] cloning $REPO_URL -> $tmp (blob:none, timeout ${CLONE_TIMEOUT}s)"
-        if timeout "$CLONE_TIMEOUT" git clone --filter=blob:none "$REPO_URL" "$tmp"; then
-            if mv "$tmp" "$BONG_REPO"; then
-                echo "[entrypoint] 克隆完成，已原子切换到 $BONG_REPO"
-                return 0
+        # 子 shell 内装 EXIT/TERM 清理 trap：克隆被中断也不留半成品，
+        # 且不污染调用方（supervisor/测试）的 trap
+        (
+            tmp="$parent/.clone-tmp.$$"
+            trap 'rm -rf "$tmp"' EXIT
+            trap 'exit 143' TERM INT
+            rm -rf "$tmp"
+            echo "[entrypoint] cloning $REPO_URL -> $tmp (blob:none, timeout ${CLONE_TIMEOUT}s)"
+            if timeout "$CLONE_TIMEOUT" git clone --filter=blob:none "$REPO_URL" "$tmp"; then
+                if mv "$tmp" "$BONG_REPO"; then
+                    echo "[entrypoint] 克隆完成，已原子切换到 $BONG_REPO"
+                    exit 0
+                fi
+                echo "[entrypoint] WARN: 临时目录切换失败（mv $tmp -> $BONG_REPO）"
             fi
-            echo "[entrypoint] WARN: 临时目录切换失败（mv $tmp -> $BONG_REPO）"
-        fi
-        rm -rf "$tmp"
+            exit 1
+        ) && return 0
         echo "[entrypoint] clone/切换失败，${delay}s 后重试"
         sleep "$delay"
     done
@@ -95,6 +110,7 @@ init_repo() {
 # ENTRYPOINT_LIB_ONLY=1 时仅暴露函数（供 test_entrypoint.sh 无网络测试）
 if [ -z "${ENTRYPOINT_LIB_ONLY:-}" ]; then
     git config --global --add safe.directory '*' || true
+    clean_stale_tmp
     # 校验/隔离同步完成（快）——watcher 采集绝不可能读到错误/损坏仓库
     prepare_repo_slot
     rc=$?

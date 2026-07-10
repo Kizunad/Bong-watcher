@@ -136,6 +136,16 @@ check "rc=2 时 watcher 路径改指不存在的安全路径" $?
 [ "$(watcher_repo_path 0)" = "$BONG_REPO" ] && [ "$(watcher_repo_path 1)" = "$BONG_REPO" ]
 check "rc=0/1 时 watcher 路径不变" $?
 
+# ── 启动清扫：陈旧 clone-tmp 被清、仓库与隔离目录不受伤 ──
+new_env sweep
+init_repo > /dev/null 2>&1
+mkdir -p "$CASE_DIR/.clone-tmp.111" "$CASE_DIR/.clone-tmp.222"
+clean_stale_tmp
+no_tmp_residue
+check "clean_stale_tmp 清掉陈旧临时目录" $?
+repo_valid
+check "清扫不伤正式仓库" $?
+
 # ── 残留检查自检：主动制造隐藏残留，断言必须能发现 ────
 new_env selfcheck
 mkdir -p "$CASE_DIR/.clone-tmp.9999"
