@@ -22,8 +22,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BONG = Path(os.environ.get("BONG_REPO", str(Path.home() / "Code" / "Bong")))
-PORT = int(os.environ.get("PORT", "8901"))
-REFRESH_SEC = int(os.environ.get("REFRESH_SEC", "300"))
+
+
+def pos_int_env(name, default):
+    """环境变量解析为正整数；非法（非数字/零/负）回退默认并告警——
+    绝不让坏配置传进 time.sleep 无声杀死刷新线程。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        v = 0
+    if v <= 0:
+        print(f"[watcher] WARN: {name}={raw!r} 非法，回退默认 {default}")
+        return default
+    return v
+
+
+PORT = pos_int_env("PORT", 8901)
+REFRESH_SEC = pos_int_env("REFRESH_SEC", 300)
+BACKOFF_SEC = pos_int_env("BACKOFF_SEC", 15)
 HERE = Path(__file__).resolve().parent
 
 _LOCK = threading.Lock()
@@ -99,6 +118,12 @@ def tally_lines(text: str, strip_email: bool = False):
     ]
 
 
+def next_sleep(error, has_snapshot, refresh, backoff):
+    """短退避仅用于「报错且从未有过有效快照」（容器首启等克隆落地）；
+    已有有效快照后的偶发失败沿用正常周期，不高频重试打爆 git/gh。"""
+    return max(1, backoff if (error and not has_snapshot) else refresh)
+
+
 def parse_merged_log(raw: str):
     """`git log --format=%H%x09%s%x09%cs --name-only` 输出 → merged PR 列表。"""
     prs = []
@@ -137,6 +162,34 @@ def gh_json(args):
     return json.loads(run(["gh"] + args))
 
 
+def collect_open_prs(modules, gh=gh_json):
+    """采集 open PR + 门禁 + 触及模块。gh 可注入供测试。"""
+    open_prs = gh(["pr", "list", "--state", "open", "--json",
+                   "number,title,headRefName,createdAt,statusCheckRollup"])
+    for pr in open_prs:
+        checks = []
+        for c in pr.pop("statusCheckRollup") or []:
+            checks.append({
+                "name": c.get("name") or c.get("context") or "?",
+                "state": (c.get("conclusion") or c.get("state") or "PENDING").upper(),
+            })
+        pr["checks"] = checks
+        # files 查询失败必须让整轮采集失败（由 safe_open_prs 沿用旧快照）——
+        # 吞成空列表会把上一轮的模块归属静默清空
+        files = gh(["pr", "view", str(pr["number"]), "--json", "files",
+                    "--jq", "[.files[].path]"])
+        pr["modules"] = infer_modules(files, modules)
+    return open_prs
+
+
+def safe_open_prs(prev, fetch):
+    """open PR 采集失败只降级本栏：沿用上轮值 + 字段级错误，绝不中止整轮。"""
+    try:
+        return fetch(), None
+    except Exception as e:
+        return list(prev or []), f"{type(e).__name__}: {e}"
+
+
 def collect():
     """一轮全量采集，返回 (state_dict, module_map_html_bytes)。"""
     run(["git", "fetch", "origin", "--quiet"], timeout=120)
@@ -155,22 +208,11 @@ def collect():
     for pr in merged:
         pr["modules"] = infer_modules(pr.pop("files"), modules)
 
-    open_prs = gh_json(["pr", "list", "--state", "open", "--json",
-                        "number,title,headRefName,createdAt,statusCheckRollup"])
-    for pr in open_prs:
-        checks = []
-        for c in pr.pop("statusCheckRollup") or []:
-            checks.append({
-                "name": c.get("name") or c.get("context") or "?",
-                "state": (c.get("conclusion") or c.get("state") or "PENDING").upper(),
-            })
-        pr["checks"] = checks
-        try:
-            files = gh_json(["pr", "view", str(pr["number"]), "--json", "files",
-                             "--jq", "[.files[].path]"])
-        except Exception:
-            files = []
-        pr["modules"] = infer_modules(files, modules)
+    with _LOCK:
+        prev_open = list(_STATE.get("open_prs") or [])
+    open_prs, open_prs_error = safe_open_prs(
+        prev_open, lambda: collect_open_prs(modules)
+    )
 
     model_trailers = tally_lines(
         run(["git", "log", "origin/main", "--format=%(trailers:key=Model,valueonly)"])
@@ -197,6 +239,7 @@ def collect():
             "finished": count_tree("docs/finished_plans"),
         },
         "open_prs": open_prs,
+        "open_prs_error": open_prs_error,
         "merged": merged,
         "model_trailers": model_trailers,
         "coauthors": coauthors,
@@ -218,7 +261,10 @@ def refresher():
             with _LOCK:
                 _STATE = dict(_STATE, error=f"{type(e).__name__}: {e}",
                               generated_at=_STATE.get("generated_at"))
-        time.sleep(REFRESH_SEC)
+        with _LOCK:
+            err = _STATE.get("error")
+            has_snap = _STATE.get("generated_at") is not None
+        time.sleep(next_sleep(err, has_snap, REFRESH_SEC, BACKOFF_SEC))
 
 
 # ---------------------------------------------------------------- http server
