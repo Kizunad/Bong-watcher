@@ -11,10 +11,21 @@ set -u
 REPO_URL="${BONG_REPO_URL:-https://github.com/Kizunad/Bong.git}"
 : "${BONG_REPO:=/data/Bong}"
 CLONE_TIMEOUT="${CLONE_TIMEOUT:-600}"
+CLONE_RETRY_DELAYS="${CLONE_RETRY_DELAYS:-5 15 30}"
+
+normalize_url() {
+    # 去尾部 .git 与斜杠，避免等价 URL 误判不一致
+    printf '%s' "$1" | sed -e 's/\.git$//' -e 's:/*$::'
+}
 
 repo_valid() {
-    git -C "$BONG_REPO" rev-parse --verify HEAD > /dev/null 2>&1 &&
-        git -C "$BONG_REPO" config remote.origin.url > /dev/null 2>&1
+    git -C "$BONG_REPO" rev-parse --verify HEAD > /dev/null 2>&1 || return 1
+    actual="$(git -C "$BONG_REPO" config remote.origin.url 2>/dev/null)" || return 1
+    if [ "$(normalize_url "$actual")" != "$(normalize_url "$REPO_URL")" ]; then
+        echo "[entrypoint] 持久卷仓库 origin ($actual) 与 BONG_REPO_URL ($REPO_URL) 不一致，按无效处理"
+        return 1
+    fi
+    return 0
 }
 
 init_repo() {
@@ -31,7 +42,11 @@ init_repo() {
         }
     fi
     parent="$(dirname "$BONG_REPO")"
-    for delay in 5 15 30; do
+    mkdir -p "$parent" || {
+        echo "[entrypoint] WARN: 无法创建父目录 $parent，跳过克隆（HTTP 服务照常）"
+        return 1
+    }
+    for delay in $CLONE_RETRY_DELAYS; do
         tmp="$parent/.clone-tmp.$$"
         rm -rf "$tmp"   # 只清理本进程自建的临时目录
         echo "[entrypoint] cloning $REPO_URL -> $tmp (blob:none, timeout ${CLONE_TIMEOUT}s)"

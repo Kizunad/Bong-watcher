@@ -211,9 +211,16 @@ class CollectOpenPrs(unittest.TestCase):
         ], "name/context 与 conclusion/state 双回退 + 全缺省兜底")
         self.assertEqual(prs[0]["modules"], ["server/npc"])
 
-    def test_files_fetch_failure_degrades_to_empty_modules(self):
-        prs = collect_open_prs(MODS, gh=self.fake_gh(RuntimeError("files api down")))
-        self.assertEqual(prs[0]["modules"], [], "files 拉取失败只降级本 PR 的模块芯片")
+    def test_files_fetch_failure_fails_whole_round(self):
+        with self.assertRaises(RuntimeError, msg="files 失败必须上抛，不得吞成空列表清空模块归属"):
+            collect_open_prs(MODS, gh=self.fake_gh(RuntimeError("files api down")))
+
+    def test_files_failure_preserves_old_snapshot_via_safe_wrapper(self):
+        prev = [{"number": 5, "modules": ["server/npc"]}]
+        prs, err = safe_open_prs(
+            prev, lambda: collect_open_prs(MODS, gh=self.fake_gh(RuntimeError("x"))))
+        self.assertEqual(prs, prev, "files 失败经 safe 包装必须完整沿用旧快照（含模块归属）")
+        self.assertTrue(err)
 
     def test_list_failure_propagates(self):
         def gh(args):

@@ -149,11 +149,10 @@ def collect_open_prs(modules, gh=gh_json):
                 "state": (c.get("conclusion") or c.get("state") or "PENDING").upper(),
             })
         pr["checks"] = checks
-        try:
-            files = gh(["pr", "view", str(pr["number"]), "--json", "files",
-                        "--jq", "[.files[].path]"])
-        except Exception:
-            files = []
+        # files 查询失败必须让整轮采集失败（由 safe_open_prs 沿用旧快照）——
+        # 吞成空列表会把上一轮的模块归属静默清空
+        files = gh(["pr", "view", str(pr["number"]), "--json", "files",
+                    "--jq", "[.files[].path]"])
         pr["modules"] = infer_modules(files, modules)
     return open_prs
 
