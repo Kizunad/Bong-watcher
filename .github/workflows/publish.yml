@@ -11,6 +11,9 @@ permissions:
   contents: read
   packages: write
 
+# 发布契约：同组串行、排队时 GitHub 只保留最新 pending——连续 push 时
+# 中间提交不保证有 sha 镜像，latest 恒指向最新一次完整成功的发布
+# （Watchtower 只消费 latest，此语义正是部署所需；如需逐提交镜像另开机制）
 concurrency:
   group: publish-image
   # 发布临界区不允许中途取消——防止只推了部分标签的半成品发布

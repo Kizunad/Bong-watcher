@@ -105,6 +105,21 @@ check "mv 失败返回非零（不假宣告成功）" $?
 no_tmp_residue
 check "mv 失败后临时目录被清理" $?
 
+# ── prepare_repo_slot 同步隔离：错误 origin 在启动前就被移走 ──
+new_env race
+init_repo > /dev/null 2>&1
+git -C "$BONG_REPO" remote set-url origin "file://$T/wrong"
+prepare_repo_slot > /dev/null 2>&1
+rc=$?
+[ "$rc" = 1 ]
+check "prepare_repo_slot 对错误 origin 返回需克隆" $?
+[ ! -e "$BONG_REPO" ]
+check "prepare 后目标已同步移走（采集不可能读到错误仓库）" $?
+clone_repo > /dev/null 2>&1
+check "prepare 后 clone_repo 补齐" $?
+repo_valid
+check "补齐后 repo_valid" $?
+
 # ── 残留检查自检：主动制造隐藏残留，断言必须能发现 ────
 new_env selfcheck
 mkdir -p "$CASE_DIR/.clone-tmp.9999"

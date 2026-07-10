@@ -100,10 +100,10 @@ def tally_lines(text: str, strip_email: bool = False):
     ]
 
 
-def next_sleep(error, refresh, backoff):
-    """无有效快照（采集报错，如容器首启克隆未完成）时短间隔重试，
-    有效后回到正常周期——克隆一落地最多 backoff 秒即出首个有效快照。"""
-    return backoff if error else refresh
+def next_sleep(error, has_snapshot, refresh, backoff):
+    """短退避仅用于「报错且从未有过有效快照」（容器首启等克隆落地）；
+    已有有效快照后的偶发失败沿用正常周期，不高频重试打爆 git/gh。"""
+    return backoff if (error and not has_snapshot) else refresh
 
 
 def parse_merged_log(raw: str):
@@ -245,7 +245,8 @@ def refresher():
                               generated_at=_STATE.get("generated_at"))
         with _LOCK:
             err = _STATE.get("error")
-        time.sleep(next_sleep(err, REFRESH_SEC, BACKOFF_SEC))
+            has_snap = _STATE.get("generated_at") is not None
+        time.sleep(next_sleep(err, has_snap, REFRESH_SEC, BACKOFF_SEC))
 
 
 # ---------------------------------------------------------------- http server

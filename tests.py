@@ -265,15 +265,22 @@ class SafeOpenPrsSequences(unittest.TestCase):
 
 
 class NextSleep(unittest.TestCase):
-    def test_error_uses_backoff(self):
-        self.assertEqual(next_sleep("repo missing", 300, 15), 15,
-                         "无有效快照时必须短间隔重试（克隆落地即快速出图）")
+    def test_firstboot_error_uses_backoff(self):
+        self.assertEqual(next_sleep("repo missing", False, 300, 15), 15,
+                         "首启失败（从未有快照）必须短间隔重试")
 
-    def test_ok_uses_refresh(self):
-        self.assertEqual(next_sleep(None, 300, 15), 300)
+    def test_error_after_snapshot_uses_refresh(self):
+        self.assertEqual(next_sleep("gh down", True, 300, 15), 300,
+                         "已有有效快照后的偶发失败不得高频重试")
+
+    def test_recovered_uses_refresh(self):
+        self.assertEqual(next_sleep(None, True, 300, 15), 300)
+
+    def test_firstboot_ok_uses_refresh(self):
+        self.assertEqual(next_sleep(None, False, 300, 15), 300)
 
     def test_empty_error_treated_as_ok(self):
-        self.assertEqual(next_sleep("", 300, 15), 300)
+        self.assertEqual(next_sleep("", False, 300, 15), 300)
 
 
 if __name__ == "__main__":

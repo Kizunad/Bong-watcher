@@ -29,7 +29,8 @@ repo_valid() {
     return 0
 }
 
-init_repo() {
+# 同步阶段：校验 + 隔离（快操作）。返回 0=仓库已有效 1=槽位已清空需克隆 2=隔离失败
+prepare_repo_slot() {
     if repo_valid; then
         echo "[entrypoint] 仓库有效: $BONG_REPO"
         return 0
@@ -39,9 +40,14 @@ init_repo() {
         echo "[entrypoint] 仓库无效/损坏，隔离 -> $quarantine（不删除任何既有数据）"
         mv "$BONG_REPO" "$quarantine" || {
             echo "[entrypoint] WARN: 隔离失败，跳过克隆（HTTP 服务照常，dashboard 报采集错误）"
-            return 1
+            return 2
         }
     fi
+    return 1
+}
+
+# 异步阶段：仅克隆（慢操作）
+clone_repo() {
     parent="$(dirname "$BONG_REPO")"
     mkdir -p "$parent" || {
         echo "[entrypoint] WARN: 无法创建父目录 $parent，跳过克隆（HTTP 服务照常）"
@@ -66,10 +72,23 @@ init_repo() {
     return 1
 }
 
+# 组合语义（测试用同一入口）：同步 prepare + 克隆
+init_repo() {
+    prepare_repo_slot
+    case $? in
+        0) return 0 ;;
+        2) return 1 ;;
+    esac
+    clone_repo
+}
+
 # ENTRYPOINT_LIB_ONLY=1 时仅暴露函数（供 test_entrypoint.sh 无网络测试）
 if [ -z "${ENTRYPOINT_LIB_ONLY:-}" ]; then
     git config --global --add safe.directory '*' || true
-    # 仓库初始化放后台：clone 慢/挂起/失败都不影响 HTTP 立即可用
-    init_repo &
+    # 校验/隔离同步完成（快）——watcher 采集绝不可能读到错误/损坏仓库；
+    # 只有耗时克隆放后台，HTTP 立即可用
+    prepare_repo_slot
+    rc=$?
+    [ "$rc" = 1 ] && clone_repo &
     exec python3 /app/watcher.py
 fi
