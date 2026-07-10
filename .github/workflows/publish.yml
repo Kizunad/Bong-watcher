@@ -22,8 +22,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 冒烟：单测必须全绿才发镜像
+      - name: 单测必须全绿
         run: python3 tests.py
+
+      - name: 构建镜像（先不推）
+        run: docker build -t bong-watcher:ci .
+
+      - name: 容器冒烟 ① 正常路径（无 GH_TOKEN 降级契约）
+        run: |
+          docker run -d --rm --name smoke -p 8901:8901 bong-watcher:ci
+          for i in $(seq 1 60); do
+            sleep 10
+            body=$(curl -sf http://localhost:8901/api/state.json || true)
+            err=$(printf '%s' "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('error'))" 2>/dev/null || echo pending)
+            [ "$err" = "None" ] && break
+          done
+          test "$err" = "None" || { echo "首轮采集未成功: $err"; docker logs smoke; exit 1; }
+          printf '%s' "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['module_count']>0, '模块索引为空'; assert d['open_prs_error'], '无 GH_TOKEN 却没有字段级降级错误'; assert d['error'] is None, '整轮不应因缺 token 报错'; print('无 token 降级契约 OK:', d['module_count'], '模块')"
+          curl -sf -o /dev/null http://localhost:8901/module-map/
+          docker stop smoke
+
+      - name: 容器冒烟 ② 克隆失败仍存活契约
+        run: |
+          docker run -d --rm --name smoke2 -p 8902:8901 \
+            -e BONG_REPO_URL=https://invalid.invalid/nope.git bong-watcher:ci
+          # 3 次退避重试共 ~50s + 启动，最多等 2 min
+          for i in $(seq 1 12); do
+            sleep 10
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8902/api/state.json || true)
+            [ "$code" = "200" ] && break
+          done
+          test "$code" = "200" || { echo "克隆失败后 HTTP 未存活"; docker logs smoke2; exit 1; }
+          curl -s http://localhost:8902/api/state.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['error'], '仓库缺失应报采集错误'; print('克隆失败存活契约 OK')"
+          docker stop smoke2
 
       - uses: docker/login-action@v3
         with:
@@ -31,10 +62,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/kizunad/bong-watcher:latest
-            ghcr.io/kizunad/bong-watcher:${{ github.sha }}
+      - name: 冒烟全绿后推送
+        run: |
+          docker tag bong-watcher:ci ghcr.io/kizunad/bong-watcher:latest
+          docker tag bong-watcher:ci ghcr.io/kizunad/bong-watcher:${{ github.sha }}
+          docker push ghcr.io/kizunad/bong-watcher:latest
+          docker push ghcr.io/kizunad/bong-watcher:${{ github.sha }}

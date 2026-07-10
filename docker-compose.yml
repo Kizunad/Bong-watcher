@@ -16,5 +16,16 @@ services:
       # Watchtower 白名单模式（--label-enable）时放行本容器
       - com.centurylinklabs.watchtower.enable=true
 
+  # 已有全局 Watchtower 的环境不需要这个服务（默认不启动）；
+  # 没有的话 `docker compose --profile watchtower up -d` 一并拉起。
+  watchtower:
+    image: containrrr/watchtower
+    container_name: bong-watchtower
+    profiles: ["watchtower"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --interval 300 --cleanup
+    restart: unless-stopped
+
 volumes:
   bong-repo:

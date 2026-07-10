@@ -137,6 +137,35 @@ def gh_json(args):
     return json.loads(run(["gh"] + args))
 
 
+def collect_open_prs(modules, gh=gh_json):
+    """采集 open PR + 门禁 + 触及模块。gh 可注入供测试。"""
+    open_prs = gh(["pr", "list", "--state", "open", "--json",
+                   "number,title,headRefName,createdAt,statusCheckRollup"])
+    for pr in open_prs:
+        checks = []
+        for c in pr.pop("statusCheckRollup") or []:
+            checks.append({
+                "name": c.get("name") or c.get("context") or "?",
+                "state": (c.get("conclusion") or c.get("state") or "PENDING").upper(),
+            })
+        pr["checks"] = checks
+        try:
+            files = gh(["pr", "view", str(pr["number"]), "--json", "files",
+                        "--jq", "[.files[].path]"])
+        except Exception:
+            files = []
+        pr["modules"] = infer_modules(files, modules)
+    return open_prs
+
+
+def safe_open_prs(prev, fetch):
+    """open PR 采集失败只降级本栏：沿用上轮值 + 字段级错误，绝不中止整轮。"""
+    try:
+        return fetch(), None
+    except Exception as e:
+        return list(prev or []), f"{type(e).__name__}: {e}"
+
+
 def collect():
     """一轮全量采集，返回 (state_dict, module_map_html_bytes)。"""
     run(["git", "fetch", "origin", "--quiet"], timeout=120)
@@ -155,22 +184,11 @@ def collect():
     for pr in merged:
         pr["modules"] = infer_modules(pr.pop("files"), modules)
 
-    open_prs = gh_json(["pr", "list", "--state", "open", "--json",
-                        "number,title,headRefName,createdAt,statusCheckRollup"])
-    for pr in open_prs:
-        checks = []
-        for c in pr.pop("statusCheckRollup") or []:
-            checks.append({
-                "name": c.get("name") or c.get("context") or "?",
-                "state": (c.get("conclusion") or c.get("state") or "PENDING").upper(),
-            })
-        pr["checks"] = checks
-        try:
-            files = gh_json(["pr", "view", str(pr["number"]), "--json", "files",
-                             "--jq", "[.files[].path]"])
-        except Exception:
-            files = []
-        pr["modules"] = infer_modules(files, modules)
+    with _LOCK:
+        prev_open = list(_STATE.get("open_prs") or [])
+    open_prs, open_prs_error = safe_open_prs(
+        prev_open, lambda: collect_open_prs(modules)
+    )
 
     model_trailers = tally_lines(
         run(["git", "log", "origin/main", "--format=%(trailers:key=Model,valueonly)"])
@@ -197,6 +215,7 @@ def collect():
             "finished": count_tree("docs/finished_plans"),
         },
         "open_prs": open_prs,
+        "open_prs_error": open_prs_error,
         "merged": merged,
         "model_trailers": model_trailers,
         "coauthors": coauthors,

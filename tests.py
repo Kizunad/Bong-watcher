@@ -3,9 +3,11 @@
 import unittest
 
 from watcher import (
+    collect_open_prs,
     infer_modules,
     parse_merged_log,
     parse_pr_number,
+    safe_open_prs,
     scrape_modules,
     tally_lines,
 )
@@ -159,6 +161,65 @@ class ParseMergedLog(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(parse_merged_log(""), [])
+
+
+class SafeOpenPrs(unittest.TestCase):
+    def test_success_passthrough(self):
+        prs, err = safe_open_prs([], lambda: [{"number": 1}])
+        self.assertEqual((prs, err), ([{"number": 1}], None))
+
+    def test_failure_keeps_prev(self):
+        prev = [{"number": 7}]
+        def boom():
+            raise RuntimeError("gh: no token")
+        prs, err = safe_open_prs(prev, boom)
+        self.assertEqual(prs, prev, "失败时必须沿用上轮 open_prs")
+        self.assertIn("no token", err)
+
+    def test_failure_no_prev_gives_empty(self):
+        prs, err = safe_open_prs(None, lambda: (_ for _ in ()).throw(ValueError("x")))
+        self.assertEqual(prs, [])
+        self.assertTrue(err.startswith("ValueError"))
+
+
+class CollectOpenPrs(unittest.TestCase):
+    LIST = [{"number": 5, "title": "t", "headRefName": "b", "createdAt": "d",
+             "statusCheckRollup": [
+                 {"name": "e2e", "conclusion": "SUCCESS"},
+                 {"context": "CodeRabbit", "state": "pending"},
+                 {"name": None, "context": None},
+             ]}]
+
+    def fake_gh(self, files_result):
+        def gh(args):
+            if args[:2] == ["pr", "list"]:
+                import copy
+                return copy.deepcopy(self.LIST)
+            if args[:2] == ["pr", "view"]:
+                if isinstance(files_result, Exception):
+                    raise files_result
+                return files_result
+            raise AssertionError(f"unexpected gh args: {args}")
+        return gh
+
+    def test_happy_checks_and_modules(self):
+        prs = collect_open_prs(MODS, gh=self.fake_gh(["server/src/npc/a.rs"]))
+        self.assertEqual(prs[0]["checks"], [
+            {"name": "e2e", "state": "SUCCESS"},
+            {"name": "CodeRabbit", "state": "PENDING"},
+            {"name": "?", "state": "PENDING"},
+        ], "name/context 与 conclusion/state 双回退 + 全缺省兜底")
+        self.assertEqual(prs[0]["modules"], ["server/npc"])
+
+    def test_files_fetch_failure_degrades_to_empty_modules(self):
+        prs = collect_open_prs(MODS, gh=self.fake_gh(RuntimeError("files api down")))
+        self.assertEqual(prs[0]["modules"], [], "files 拉取失败只降级本 PR 的模块芯片")
+
+    def test_list_failure_propagates(self):
+        def gh(args):
+            raise RuntimeError("gh auth missing")
+        with self.assertRaises(RuntimeError):
+            collect_open_prs(MODS, gh=gh)
 
 
 if __name__ == "__main__":

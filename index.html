@@ -202,7 +202,10 @@ async function refresh() {
     <div class="node${hot ? " hot" : ""}"><div class="dot mono">${v ?? "?"}</div>
     <div class="k">${k}</div><div class="v">${esc(sub)}</div></div>`).join("");
 
-  $("open").innerHTML = (s.open_prs || []).map(pr => `
+  const oerr = s.open_prs_error
+    ? `<tr><td colspan="3"><span class="chip ck warn">open PR 采集降级（沿用上轮）</span> <span class="br">${esc(s.open_prs_error)}</span></td></tr>`
+    : "";
+  $("open").innerHTML = oerr + (s.open_prs || []).map(pr => `
     <tr><td class="mono">#${pr.number}</td>
     <td><span class="t">${esc(pr.title)}</span><br><span class="br mono">${esc(pr.headRefName)}</span></td>
     <td><div class="chips">${
