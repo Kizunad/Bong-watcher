@@ -14,8 +14,9 @@ CLONE_TIMEOUT="${CLONE_TIMEOUT:-600}"
 CLONE_RETRY_DELAYS="${CLONE_RETRY_DELAYS:-5 15 30}"
 
 normalize_url() {
-    # 去尾部 .git 与斜杠，避免等价 URL 误判不一致
-    printf '%s' "$1" | sed -e 's/\.git$//' -e 's:/*$::'
+    # 先去全部尾斜杠、再去尾部 .git、再去残余尾斜杠——
+    # Bong / Bong.git / Bong/ / Bong.git/ / Bong.git// 全部归一等价
+    printf '%s' "$1" | sed -e 's:/*$::' -e 's/\.git$//' -e 's:/*$::'
 }
 
 repo_valid() {
@@ -51,21 +52,24 @@ init_repo() {
         rm -rf "$tmp"   # 只清理本进程自建的临时目录
         echo "[entrypoint] cloning $REPO_URL -> $tmp (blob:none, timeout ${CLONE_TIMEOUT}s)"
         if timeout "$CLONE_TIMEOUT" git clone --filter=blob:none "$REPO_URL" "$tmp"; then
-            mv "$tmp" "$BONG_REPO"
-            echo "[entrypoint] 克隆完成，已原子切换到 $BONG_REPO"
-            return 0
+            if mv "$tmp" "$BONG_REPO"; then
+                echo "[entrypoint] 克隆完成，已原子切换到 $BONG_REPO"
+                return 0
+            fi
+            echo "[entrypoint] WARN: 临时目录切换失败（mv $tmp -> $BONG_REPO）"
         fi
         rm -rf "$tmp"
-        echo "[entrypoint] clone 失败，${delay}s 后重试"
+        echo "[entrypoint] clone/切换失败，${delay}s 后重试"
         sleep "$delay"
     done
     echo "[entrypoint] WARN: 克隆最终失败——HTTP 服务照常运行，dashboard 显示采集错误；修复网络/URL 后重启容器"
     return 1
 }
 
-git config --global --add safe.directory '*' || true
-
-# 仓库初始化放后台：clone 慢/挂起/失败都不影响 HTTP 立即可用
-init_repo &
-
-exec python3 /app/watcher.py
+# ENTRYPOINT_LIB_ONLY=1 时仅暴露函数（供 test_entrypoint.sh 无网络测试）
+if [ -z "${ENTRYPOINT_LIB_ONLY:-}" ]; then
+    git config --global --add safe.directory '*' || true
+    # 仓库初始化放后台：clone 慢/挂起/失败都不影响 HTTP 立即可用
+    init_repo &
+    exec python3 /app/watcher.py
+fi

@@ -25,6 +25,9 @@ jobs:
       - name: 单测必须全绿
         run: python3 tests.py
 
+      - name: entrypoint 状态机契约测试（无网络）
+        run: sh test_entrypoint.sh
+
       - name: 构建镜像（先不推）
         run: docker build -t bong-watcher:ci .
 
