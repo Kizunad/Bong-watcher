@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: publish-image
-  cancel-in-progress: true
+  # 发布临界区不允许中途取消——防止只推了部分标签的半成品发布
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -74,9 +75,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 冒烟全绿后推送
+      - name: 冒烟全绿后推送（sha 先行确认，latest 最后提升）
         run: |
-          docker tag bong-watcher:ci ghcr.io/kizunad/bong-watcher:latest
+          # 顺序契约：不可变 sha 标签推送成功后才提升 latest——
+          # 失败/中断的发布绝不更新 Watchtower 订阅的标签
           docker tag bong-watcher:ci ghcr.io/kizunad/bong-watcher:${{ github.sha }}
-          docker push ghcr.io/kizunad/bong-watcher:latest
           docker push ghcr.io/kizunad/bong-watcher:${{ github.sha }}
+          docker tag bong-watcher:ci ghcr.io/kizunad/bong-watcher:latest
+          docker push ghcr.io/kizunad/bong-watcher:latest

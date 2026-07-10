@@ -10,6 +10,10 @@ check() { # $1=描述 $2=上一命令退出码期望0
     if [ "$2" -eq 0 ]; then echo "ok   $1"; else echo "FAIL $1"; FAILS=$((FAILS + 1)); fi
 }
 
+no_tmp_residue() { # 隐藏目录也要能查到——裸 ls 看不见 dotfile
+    [ -z "$(find "$CASE_DIR" -maxdepth 1 -name '.clone-tmp.*' -print -quit)" ]
+}
+
 # 本地源仓库
 SRC="$T/src"
 git init -q "$SRC"
@@ -45,7 +49,7 @@ repo_valid
 check "克隆后 repo_valid" $?
 init_repo > /dev/null 2>&1
 check "有效卷复用（第二次 init 直接通过）" $?
-[ -z "$(ls "$CASE_DIR" | grep clone-tmp)" ]
+no_tmp_residue
 check "无 clone-tmp 残留" $?
 
 # ── 等价 origin 变体复用（不误隔离） ──────────────────
@@ -81,7 +85,7 @@ init_repo > /dev/null 2>&1
 check "克隆失败返回非零" $?
 [ ! -e "$BONG_REPO" ]
 check "失败后目标目录不存在（无半成品）" $?
-[ -z "$(ls "$CASE_DIR" | grep clone-tmp)" ]
+no_tmp_residue
 check "失败后无 clone-tmp 残留" $?
 
 # ── 深层父目录：mkdir -p 兜底 ─────────────────────────
@@ -98,8 +102,19 @@ rc=$?
 unset -f mv
 [ $rc -ne 0 ]
 check "mv 失败返回非零（不假宣告成功）" $?
-[ -z "$(ls "$CASE_DIR" | grep clone-tmp)" ]
+no_tmp_residue
 check "mv 失败后临时目录被清理" $?
+
+# ── 残留检查自检：主动制造隐藏残留，断言必须能发现 ────
+new_env selfcheck
+mkdir -p "$CASE_DIR/.clone-tmp.9999"
+if no_tmp_residue; then
+    echo "FAIL 残留自检：断言未发现主动制造的 .clone-tmp 残留"
+    FAILS=$((FAILS + 1))
+else
+    echo "ok   残留自检：断言能发现隐藏残留目录"
+fi
+rm -rf "$CASE_DIR/.clone-tmp.9999"
 
 echo "----"
 if [ "$FAILS" -eq 0 ]; then

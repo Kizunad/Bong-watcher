@@ -24,6 +24,7 @@ from pathlib import Path
 BONG = Path(os.environ.get("BONG_REPO", str(Path.home() / "Code" / "Bong")))
 PORT = int(os.environ.get("PORT", "8901"))
 REFRESH_SEC = int(os.environ.get("REFRESH_SEC", "300"))
+BACKOFF_SEC = int(os.environ.get("BACKOFF_SEC", "15"))
 HERE = Path(__file__).resolve().parent
 
 _LOCK = threading.Lock()
@@ -97,6 +98,12 @@ def tally_lines(text: str, strip_email: bool = False):
         {"name": k, "count": v}
         for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
+
+
+def next_sleep(error, refresh, backoff):
+    """无有效快照（采集报错，如容器首启克隆未完成）时短间隔重试，
+    有效后回到正常周期——克隆一落地最多 backoff 秒即出首个有效快照。"""
+    return backoff if error else refresh
 
 
 def parse_merged_log(raw: str):
@@ -236,7 +243,9 @@ def refresher():
             with _LOCK:
                 _STATE = dict(_STATE, error=f"{type(e).__name__}: {e}",
                               generated_at=_STATE.get("generated_at"))
-        time.sleep(REFRESH_SEC)
+        with _LOCK:
+            err = _STATE.get("error")
+        time.sleep(next_sleep(err, REFRESH_SEC, BACKOFF_SEC))
 
 
 # ---------------------------------------------------------------- http server

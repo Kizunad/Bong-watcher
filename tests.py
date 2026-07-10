@@ -4,6 +4,7 @@ import unittest
 
 from watcher import (
     collect_open_prs,
+    next_sleep,
     infer_modules,
     parse_merged_log,
     parse_pr_number,
@@ -261,6 +262,18 @@ class SafeOpenPrsSequences(unittest.TestCase):
         r1, _ = safe_open_prs(prev, self._boom)
         r1.append({"number": 4})
         self.assertEqual(prev, [{"number": 3}], "降级返回值须为副本，不得污染上轮快照")
+
+
+class NextSleep(unittest.TestCase):
+    def test_error_uses_backoff(self):
+        self.assertEqual(next_sleep("repo missing", 300, 15), 15,
+                         "无有效快照时必须短间隔重试（克隆落地即快速出图）")
+
+    def test_ok_uses_refresh(self):
+        self.assertEqual(next_sleep(None, 300, 15), 300)
+
+    def test_empty_error_treated_as_ok(self):
+        self.assertEqual(next_sleep("", 300, 15), 300)
 
 
 if __name__ == "__main__":
