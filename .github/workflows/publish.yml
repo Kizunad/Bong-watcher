@@ -80,12 +80,21 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8902/api/state.json)
           test "$code" = "200" || { echo "克隆终败后 HTTP 未存活"; docker logs smoke2; exit 1; }
           curl -s http://localhost:8902/api/state.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['error'], '仓库缺失应报采集错误'; print('克隆终败后存活契约 OK')"
-          # PID1 信号契约：docker stop 须在宽限期内秒退（--init 转发 SIGTERM）
-          t0=$(date +%s)
           docker stop smoke2
+
+      - name: 容器冒烟 ③ 克隆进行中 stop 秒退契约
+        run: |
+          # 长重试间隔让 clone worker 确定处于运行态（重试 sleep 中）
+          docker run -d --rm --init --name smoke3 -p 8903:8901 \
+            -e BONG_REPO_URL=https://invalid.invalid/nope.git \
+            -e CLONE_TIMEOUT=5 -e CLONE_RETRY_DELAYS="600 600" bong-watcher:ci
+          sleep 12   # 首次 clone 已失败、worker 进入 600s 重试 sleep（仍在运行）
+          docker logs smoke3 2>&1 | grep -q "后重试" || { echo "clone worker 未进入重试运行态"; docker logs smoke3; exit 1; }
+          t0=$(date +%s)
+          docker stop smoke3
           dt=$(( $(date +%s) - t0 ))
-          test "$dt" -le 5 || { echo "docker stop 用了 ${dt}s（信号未被处理，等到强杀）"; exit 1; }
-          echo "stop 时延契约 OK (${dt}s)"
+          test "$dt" -le 5 || { echo "克隆进行中 docker stop 用了 ${dt}s（supervisor 未转发/回收）"; exit 1; }
+          echo "克隆进行中 stop 秒退契约 OK (${dt}s)"
 
       - uses: docker/login-action@v3
         with:

@@ -95,15 +95,32 @@ init_repo() {
 # ENTRYPOINT_LIB_ONLY=1 时仅暴露函数（供 test_entrypoint.sh 无网络测试）
 if [ -z "${ENTRYPOINT_LIB_ONLY:-}" ]; then
     git config --global --add safe.directory '*' || true
-    # 校验/隔离同步完成（快）——watcher 采集绝不可能读到错误/损坏仓库；
-    # 只有耗时克隆放后台，HTTP 立即可用
+    # 校验/隔离同步完成（快）——watcher 采集绝不可能读到错误/损坏仓库
     prepare_repo_slot
     rc=$?
-    [ "$rc" = 1 ] && clone_repo &
     BONG_REPO="$(watcher_repo_path "$rc")"
     export BONG_REPO
     if [ "$rc" = 2 ]; then
         echo "[entrypoint] WARN: 隔离失败——watcher 改指安全空路径 $BONG_REPO，不采集无效仓库"
     fi
-    exec python3 /app/watcher.py
+
+    # 轻量 supervisor：同时持有 watcher 与 clone worker 的 PID，
+    # TERM/INT 转发给两者并 wait 回收——后台克隆不再是无人管理的孤儿
+    python3 /app/watcher.py &
+    WATCHER_PID=$!
+    CLONE_PID=""
+    if [ "$rc" = 1 ]; then
+        clone_repo &
+        CLONE_PID=$!
+    fi
+    on_term() {
+        kill -TERM "$WATCHER_PID" ${CLONE_PID:+"$CLONE_PID"} 2>/dev/null
+    }
+    trap on_term TERM INT
+    wait "$WATCHER_PID"
+    code=$?
+    # watcher 退出（或收到停止信号）后：终止并回收 clone worker
+    [ -n "$CLONE_PID" ] && kill -TERM "$CLONE_PID" 2>/dev/null
+    wait 2>/dev/null || true
+    exit "$code"
 fi
