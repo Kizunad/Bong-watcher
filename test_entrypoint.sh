@@ -120,6 +120,22 @@ check "prepare 后 clone_repo 补齐" $?
 repo_valid
 check "补齐后 repo_valid" $?
 
+# ── 隔离失败：watcher 必须改指安全空路径 ──────────────
+new_env quarfail
+init_repo > /dev/null 2>&1
+git -C "$BONG_REPO" remote set-url origin "file://$T/wrong2"
+mv() { return 1; }
+prepare_repo_slot > /dev/null 2>&1
+rc=$?
+unset -f mv
+[ "$rc" = 2 ]
+check "隔离失败返回 rc=2" $?
+wp="$(watcher_repo_path "$rc")"
+[ "$wp" != "$BONG_REPO" ] && [ ! -e "$wp" ]
+check "rc=2 时 watcher 路径改指不存在的安全路径" $?
+[ "$(watcher_repo_path 0)" = "$BONG_REPO" ] && [ "$(watcher_repo_path 1)" = "$BONG_REPO" ]
+check "rc=0/1 时 watcher 路径不变" $?
+
 # ── 残留检查自检：主动制造隐藏残留，断言必须能发现 ────
 new_env selfcheck
 mkdir -p "$CASE_DIR/.clone-tmp.9999"

@@ -32,12 +32,22 @@ jobs:
       - name: entrypoint 状态机契约测试（无网络）
         run: sh test_entrypoint.sh
 
+      - name: compose 部署配置校验
+        run: |
+          GH_TOKEN=dummy docker compose config > /tmp/composed.yml
+          grep -q "com.centurylinklabs.watchtower.enable" /tmp/composed.yml
+          grep -q "ghcr.io/kizunad/bong-watcher:latest" /tmp/composed.yml
+          grep -q "bong-repo" /tmp/composed.yml
+          grep -q "init: true" /tmp/composed.yml
+          GH_TOKEN=dummy docker compose --profile watchtower config | grep -q "containrrr/watchtower"
+          echo "compose 配置校验 OK"
+
       - name: 构建镜像（先不推）
         run: docker build -t bong-watcher:ci .
 
       - name: 容器冒烟 ① 正常路径（无 GH_TOKEN 降级契约）
         run: |
-          docker run -d --rm --name smoke -p 8901:8901 bong-watcher:ci
+          docker run -d --rm --init --name smoke -p 8901:8901 bong-watcher:ci
           for i in $(seq 1 60); do
             sleep 10
             body=$(curl -sf http://localhost:8901/api/state.json || true)
@@ -51,7 +61,7 @@ jobs:
 
       - name: 容器冒烟 ② 克隆失败仍存活契约
         run: |
-          docker run -d --rm --name smoke2 -p 8902:8901 \
+          docker run -d --rm --init --name smoke2 -p 8902:8901 \
             -e BONG_REPO_URL=https://invalid.invalid/nope.git \
             -e CLONE_TIMEOUT=5 -e CLONE_RETRY_DELAYS="1 1 1" bong-watcher:ci
           # 克隆在后台跑，HTTP 必须 30s 内可达——锁"clone 不阻塞服务"契约
@@ -70,7 +80,12 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8902/api/state.json)
           test "$code" = "200" || { echo "克隆终败后 HTTP 未存活"; docker logs smoke2; exit 1; }
           curl -s http://localhost:8902/api/state.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['error'], '仓库缺失应报采集错误'; print('克隆终败后存活契约 OK')"
+          # PID1 信号契约：docker stop 须在宽限期内秒退（--init 转发 SIGTERM）
+          t0=$(date +%s)
           docker stop smoke2
+          dt=$(( $(date +%s) - t0 ))
+          test "$dt" -le 5 || { echo "docker stop 用了 ${dt}s（信号未被处理，等到强杀）"; exit 1; }
+          echo "stop 时延契约 OK (${dt}s)"
 
       - uses: docker/login-action@v3
         with:

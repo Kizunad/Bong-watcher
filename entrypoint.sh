@@ -72,6 +72,16 @@ clone_repo() {
     return 1
 }
 
+# watcher 实际使用的仓库路径：隔离失败(rc=2)时改指确定不存在的安全路径，
+# 绝不让 watcher 读到无效/错误仓库
+watcher_repo_path() { # $1 = prepare_repo_slot 返回码
+    if [ "$1" = 2 ]; then
+        printf '%s' "${BONG_REPO}.unavailable"
+    else
+        printf '%s' "$BONG_REPO"
+    fi
+}
+
 # 组合语义（测试用同一入口）：同步 prepare + 克隆
 init_repo() {
     prepare_repo_slot
@@ -90,5 +100,10 @@ if [ -z "${ENTRYPOINT_LIB_ONLY:-}" ]; then
     prepare_repo_slot
     rc=$?
     [ "$rc" = 1 ] && clone_repo &
+    BONG_REPO="$(watcher_repo_path "$rc")"
+    export BONG_REPO
+    if [ "$rc" = 2 ]; then
+        echo "[entrypoint] WARN: 隔离失败——watcher 改指安全空路径 $BONG_REPO，不采集无效仓库"
+    fi
     exec python3 /app/watcher.py
 fi

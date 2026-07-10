@@ -5,6 +5,8 @@ services:
   bong-watcher:
     image: ghcr.io/kizunad/bong-watcher:latest
     container_name: bong-watcher
+    # tini 做 PID 1：SIGTERM 正常转发给 python，docker stop 秒退不等强杀
+    init: true
     ports:
       - "8901:8901"
     environment:

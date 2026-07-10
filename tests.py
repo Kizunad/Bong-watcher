@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Bong-watcher 纯函数单测：python3 tests.py"""
+import json
 import unittest
+from pathlib import Path
 
 from watcher import (
     collect_open_prs,
@@ -281,6 +283,55 @@ class NextSleep(unittest.TestCase):
 
     def test_empty_error_treated_as_ok(self):
         self.assertEqual(next_sleep("", False, 300, 15), 300)
+
+
+class RealGhFixtures(unittest.TestCase):
+    """真实 gh CLI 输出样本 pin（fixtures/ 由真机 gh 抓取）：
+    走与生产一致的 JSON 结构，锁 rollup 变体解析契约。"""
+    FIX = Path(__file__).resolve().parent / "fixtures"
+
+    def gh_from_fixtures(self, args):
+        if args[:2] == ["pr", "list"]:
+            return json.loads((self.FIX / "gh_pr_list.json").read_text())
+        if args[:2] == ["pr", "view"]:
+            return json.loads((self.FIX / "gh_pr_view_files.json").read_text())
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    def test_real_output_parses_with_full_contract(self):
+        prs = collect_open_prs(MODS, gh=self.gh_from_fixtures)
+        self.assertGreater(len(prs), 0, "真实 pr list 样本不应为空")
+        for pr in prs:
+            self.assertIsInstance(pr["number"], int)
+            self.assertTrue(pr["title"])
+            self.assertIsInstance(pr["checks"], list)
+            for c in pr["checks"]:
+                self.assertTrue(c["name"] and c["name"] != "?",
+                                "真实 CheckRun 条目必须解析出 name")
+                self.assertTrue(c["state"], "state 不得为空")
+                self.assertEqual(c["state"], c["state"].upper())
+            self.assertIsInstance(pr["modules"], list)
+
+    def test_real_fixture_covers_multiple_conclusions(self):
+        """真实样本至少覆盖 SUCCESS/FAILURE/NEUTRAL 三个完成态。"""
+        prs = collect_open_prs(MODS, gh=self.gh_from_fixtures)
+        states = {c["state"] for pr in prs for c in pr["checks"]}
+        self.assertTrue({"SUCCESS", "FAILURE", "NEUTRAL"} <= states,
+                        f"真实 fixture 应覆盖三个完成态，实际 {states}")
+
+    def test_in_progress_empty_conclusion_falls_back_to_pending(self):
+        """IN_PROGRESS 形态（conclusion 为空串 + status=IN_PROGRESS，键形取自
+        2026-07-10 真机 gh 输出观测）必须回退 PENDING，不得抛异常/空 state。"""
+        entry = {"__typename": "CheckRun", "name": "e2e", "conclusion": "",
+                 "status": "IN_PROGRESS", "workflowName": "e2e",
+                 "startedAt": "2026-07-10T00:00:00Z", "completedAt": None,
+                 "detailsUrl": "https://example.invalid"}
+        def gh(args):
+            if args[:2] == ["pr", "list"]:
+                return [{"number": 1, "title": "t", "headRefName": "b",
+                         "createdAt": "d", "statusCheckRollup": [entry]}]
+            return []
+        prs = collect_open_prs(MODS, gh=gh)
+        self.assertEqual(prs[0]["checks"], [{"name": "e2e", "state": "PENDING"}])
 
 
 if __name__ == "__main__":
