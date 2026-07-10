@@ -46,13 +46,13 @@ jobs:
         run: |
           docker run -d --rm --name smoke2 -p 8902:8901 \
             -e BONG_REPO_URL=https://invalid.invalid/nope.git bong-watcher:ci
-          # 3 次退避重试共 ~50s + 启动，最多等 2 min
-          for i in $(seq 1 12); do
-            sleep 10
+          # 克隆在后台跑，HTTP 必须 30s 内可达——锁"clone 不阻塞服务"契约
+          for i in $(seq 1 10); do
+            sleep 3
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8902/api/state.json || true)
             [ "$code" = "200" ] && break
           done
-          test "$code" = "200" || { echo "克隆失败后 HTTP 未存活"; docker logs smoke2; exit 1; }
+          test "$code" = "200" || { echo "克隆未完成时 HTTP 未在 30s 内可达"; docker logs smoke2; exit 1; }
           curl -s http://localhost:8902/api/state.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['error'], '仓库缺失应报采集错误'; print('克隆失败存活契约 OK')"
           docker stop smoke2
 

@@ -222,5 +222,39 @@ class CollectOpenPrs(unittest.TestCase):
             collect_open_prs(MODS, gh=gh)
 
 
+class SafeOpenPrsSequences(unittest.TestCase):
+    """跨轮状态转换契约：成功→失败沿用、失败→恢复清错、连续失败不丢数据。"""
+
+    @staticmethod
+    def _boom():
+        raise RuntimeError("gh down")
+
+    def test_success_then_failure_keeps_snapshot(self):
+        r1, e1 = safe_open_prs([], lambda: [{"number": 1}])
+        self.assertIsNone(e1)
+        r2, e2 = safe_open_prs(r1, self._boom)
+        self.assertEqual(r2, [{"number": 1}], "成功→失败必须沿用上轮快照")
+        self.assertIn("gh down", e2)
+
+    def test_failure_then_recovery_replaces_and_clears_error(self):
+        r1, e1 = safe_open_prs(None, self._boom)
+        self.assertEqual((r1, bool(e1)), ([], True), "首次失败=空列表+错误")
+        r2, e2 = safe_open_prs(r1, lambda: [{"number": 2}])
+        self.assertEqual(r2, [{"number": 2}], "恢复后必须替换为新列表")
+        self.assertIsNone(e2, "恢复后错误字段必须清空")
+
+    def test_consecutive_failures_preserve_data(self):
+        r1, _ = safe_open_prs([{"number": 9}], self._boom)
+        r2, e2 = safe_open_prs(r1, self._boom)
+        self.assertEqual(r2, [{"number": 9}], "连续失败不得破坏已保存快照")
+        self.assertTrue(e2)
+
+    def test_failure_result_is_copy_not_alias(self):
+        prev = [{"number": 3}]
+        r1, _ = safe_open_prs(prev, self._boom)
+        r1.append({"number": 4})
+        self.assertEqual(prev, [{"number": 3}], "降级返回值须为副本，不得污染上轮快照")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
